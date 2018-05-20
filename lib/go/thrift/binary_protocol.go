@@ -34,7 +34,7 @@ const BytesPoolAlloc = 256
 
 // BytesPoolPut is a public func to call to return pooled bytes to, each
 // the capacity of BytesPoolAlloc.  TBinaryProtocol.ReadBinary uses this pool
-// to allocatefrom if the size of the bytes required to return is is equal or
+// to allocate from if the size of the bytes required to return is is equal or
 // less than BytesPoolAlloc.
 func BytesPoolPut(b []byte) bool {
 	if cap(b) != BytesPoolAlloc {
