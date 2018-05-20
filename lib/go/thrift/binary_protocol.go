@@ -25,7 +25,36 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sync"
 )
+
+// MaxBytesPoolAlloc is the constant for how big the slices being allocated
+// from the bytes pool are, if the bytes required is larger then they should
+// not come from the pool.
+const MaxBytesPoolAlloc = 256
+
+// BytesPoolPut is a public func to call to return pooled bytes to, each
+// the capacity of BytesPoolAlloc.  TBinaryProtocol.ReadBinary uses this pool
+// to allocate from if the size of the bytes required to return is is equal or
+// less than BytesPoolAlloc.
+func BytesPoolPut(b []byte) bool {
+	if cap(b) != MaxBytesPoolAlloc {
+		return false
+	}
+	bytesPool.Put(b[:MaxBytesPoolAlloc])
+	return true
+}
+
+// BytesPoolGet returns a pooled byte slice of capacity BytesPoolAlloc.
+func BytesPoolGet() []byte {
+	return bytesPool.Get().([]byte)
+}
+
+var bytesPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, MaxBytesPoolAlloc)
+	},
+}
 
 type TBinaryProtocol struct {
 	trans         TRichTransport
@@ -451,7 +480,14 @@ func (p *TBinaryProtocol) ReadBinary() ([]byte, error) {
 	}
 
 	isize := int(size)
-	buf := make([]byte, isize)
+
+	var buf []byte
+	if isize <= MaxBytesPoolAlloc {
+		buf = BytesPoolGet()[:isize]
+	} else {
+		buf = make([]byte, isize)
+	}
+
 	_, err := io.ReadFull(p.trans, buf)
 	return buf, NewTProtocolException(err)
 }
