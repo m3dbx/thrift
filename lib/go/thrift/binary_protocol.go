@@ -28,17 +28,30 @@ import (
 	"sync"
 )
 
-// MaxBytesPoolAlloc is the constant for how big the slices being allocated
+// maxBytesPoolAlloc is the constant for how big the slices being allocated
 // from the bytes pool are, if the bytes required is larger then they should
 // not come from the pool.
-const MaxBytesPoolAlloc = 1024
+var maxBytesPoolAlloc = 1024
+
+// SetMaxBytesPoolAlloc sets the max bytes that are pooled for binary thrift
+// fields and must be called before any thrift binary protocols are used
+// since it is a global and is not thread safe to edit.
+func SetMaxBytesPoolAlloc(size int) {
+	maxBytesPoolAlloc = size
+}
+
+// MaxBytesPoolAlloc returns the current max bytes that are pooled for binary
+// thrift fields.
+func MaxBytesPoolAlloc() int {
+	return maxBytesPoolAlloc
+}
 
 // BytesPoolPut is a public func to call to return pooled bytes to, each
 // the capacity of BytesPoolAlloc.  TBinaryProtocol.ReadBinary uses this pool
 // to allocate from if the size of the bytes required to return is is equal or
 // less than BytesPoolAlloc.
 func BytesPoolPut(b []byte) bool {
-	if cap(b) != MaxBytesPoolAlloc {
+	if cap(b) != maxBytesPoolAlloc {
 		return false
 	}
 	element := bytesWrapperPool.Get().(*bytesWrapper)
@@ -71,7 +84,7 @@ var bytesWrapperPool = sync.Pool{
 var bytesPool = sync.Pool{
 	New: func() interface{} {
 		element := bytesWrapperPool.Get().(*bytesWrapper)
-		element.value = make([]byte, MaxBytesPoolAlloc)
+		element.value = make([]byte, maxBytesPoolAlloc)
 		return element
 	},
 }
@@ -502,7 +515,7 @@ func (p *TBinaryProtocol) ReadBinary() ([]byte, error) {
 	isize := int(size)
 
 	var buf []byte
-	if isize <= MaxBytesPoolAlloc {
+	if isize <= maxBytesPoolAlloc {
 		buf = BytesPoolGet()[:isize]
 	} else {
 		buf = make([]byte, isize)
