@@ -25,25 +25,46 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"sync"
 )
 
-// maxBytesPoolAlloc is the constant for how big the slices being allocated
-// from the bytes pool are, if the bytes required is larger then they should
-// not come from the pool.
-var maxBytesPoolAlloc = 1024
+var (
+	sliceCapacitiesForPools []int
+	bytesPools              []*sync.Pool
+)
 
-// SetMaxBytesPoolAlloc sets the max bytes that are pooled for binary thrift
+// SetMaxBytesPoolAlloc sets the capacities of byte slices that are pooled for binary thrift
 // fields and must be called before any thrift binary protocols are used
 // since it is a global and is not thread safe to edit.
-func SetMaxBytesPoolAlloc(size int) {
-	maxBytesPoolAlloc = size
+func SetMaxBytesPoolAlloc(capacities ...int) {
+	initPools(capacities)
 }
 
-// MaxBytesPoolAlloc returns the current max bytes that are pooled for binary
-// thrift fields.
-func MaxBytesPoolAlloc() int {
-	return maxBytesPoolAlloc
+func init() {
+	initPools([]int{1024})
+}
+
+func initPools(capacities []int) {
+	// Make a defensive copy.
+	sliceCapacitiesForPools = append([]int{}, capacities...)
+
+	sort.Ints(sliceCapacitiesForPools)
+
+	bytesPools = make([]*sync.Pool, 0)
+	for _, capacity := range sliceCapacitiesForPools {
+		bytesPools = append(bytesPools, newPool(capacity))
+	}
+}
+
+func newPool(capacity int) *sync.Pool {
+	return &sync.Pool{
+		New: func() interface{} {
+			element := bytesWrapperPool.Get().(*bytesWrapper)
+			element.value = make([]byte, capacity)
+			return element
+		},
+	}
 }
 
 // BytesPoolPut is a public func to call to return pooled bytes to, each
@@ -51,22 +72,30 @@ func MaxBytesPoolAlloc() int {
 // to allocate from if the size of the bytes required to return is is equal or
 // less than BytesPoolAlloc.
 func BytesPoolPut(b []byte) bool {
-	if cap(b) != maxBytesPoolAlloc {
-		return false
+	for i, capacity := range sliceCapacitiesForPools {
+		if capacity == cap(b) {
+			element := bytesWrapperPool.Get().(*bytesWrapper)
+			element.value = b
+			bytesPools[i].Put(element)
+			return true
+		}
 	}
-	element := bytesWrapperPool.Get().(*bytesWrapper)
-	element.value = b
-	bytesPool.Put(element)
-	return true
+	return false
 }
 
 // BytesPoolGet returns a pooled byte slice of capacity BytesPoolAlloc.
-func BytesPoolGet() []byte {
-	element := bytesPool.Get().(*bytesWrapper)
-	result := element.value
-	element.value = nil
-	bytesWrapperPool.Put(element)
-	return result
+func BytesPoolGet(size int) []byte {
+	for i, capacity := range sliceCapacitiesForPools {
+		if size <= capacity {
+			element := bytesPools[i].Get().(*bytesWrapper)
+			result := element.value
+			element.value = nil
+			bytesWrapperPool.Put(element)
+			return result[:size]
+		}
+	}
+
+	return make([]byte, size)
 }
 
 // bytesWrapper is used to wrap a byte slice to avoid allocing a interface{}
@@ -78,14 +107,6 @@ type bytesWrapper struct {
 var bytesWrapperPool = sync.Pool{
 	New: func() interface{} {
 		return &bytesWrapper{}
-	},
-}
-
-var bytesPool = sync.Pool{
-	New: func() interface{} {
-		element := bytesWrapperPool.Get().(*bytesWrapper)
-		element.value = make([]byte, maxBytesPoolAlloc)
-		return element
 	},
 }
 
@@ -512,14 +533,7 @@ func (p *TBinaryProtocol) ReadBinary() ([]byte, error) {
 		return nil, invalidDataLength
 	}
 
-	isize := int(size)
-
-	var buf []byte
-	if isize <= maxBytesPoolAlloc {
-		buf = BytesPoolGet()[:isize]
-	} else {
-		buf = make([]byte, isize)
-	}
+	buf := BytesPoolGet(int(size))
 
 	_, err := io.ReadFull(p.trans, buf)
 	return buf, NewTProtocolException(err)
